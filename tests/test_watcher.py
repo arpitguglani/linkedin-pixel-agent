@@ -226,7 +226,7 @@ async def test_email_event_dead_session_falls_back_to_snippet(agent):
     agent.li.dead = True
     await agent.handle_email_event({"message_id": "m2", "from_name": "Jane", "snippet": "Hello there"})
     text, _ = agent.tg.messages[-1]
-    assert "Hello there" in text and "Re-login" in text
+    assert "Hello there" in text and "logged out" in text
 
 
 async def test_send_requires_confirmation_button(agent):
