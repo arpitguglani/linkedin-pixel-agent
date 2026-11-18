@@ -1,57 +1,65 @@
 #!/usr/bin/env bash
-# One-time setup for an Oracle Cloud Always Free Ampere A1 VM (Ubuntu 24.04 ARM64).
-# Run as the default `ubuntu` user from the repo root:  bash scripts/setup_vm.sh
+# Non-interactive VM setup (Ubuntu 24.04 ARM64). Safe to re-run.
+# Invoked automatically by cloud-init from scripts/oci_bootstrap.sh, or manually
+# from the repo root:  bash scripts/setup_vm.sh
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+SUDO=""; [[ $EUID -ne 0 ]] && SUDO="sudo"
+RUN_USER="${SUDO_USER:-${RUN_USER:-$(id -un)}}"
+[[ "$RUN_USER" == "root" ]] && id ubuntu >/dev/null 2>&1 && RUN_USER=ubuntu
 
-if [[ ! -f .env ]]; then
-  echo "Create .env first: cp .env.example .env && nano .env" >&2
-  exit 1
-fi
+[[ -f .env ]] || { echo "Missing .env (cp .env.example .env and fill it in)" >&2; exit 1; }
 set -a; source .env; set +a
 
-echo "==> Installing Docker Engine + Compose plugin"
+echo "==> Docker"
 if ! command -v docker >/dev/null; then
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "$USER"
+  curl -fsSL https://get.docker.com | $SUDO sh
 fi
+$SUDO usermod -aG docker "$RUN_USER" || true
 
-echo "==> Opening ports 80/443 in the host firewall (Oracle images ship iptables rules)"
+echo "==> Host firewall: allow 80/443 (Oracle images ship restrictive iptables)"
 for port in 80 443; do
-  if ! sudo iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
-    sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$port" -j ACCEPT
-  fi
+  $SUDO iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null ||
+    $SUDO iptables -I INPUT 1 -m state --state NEW -p tcp --dport "$port" -j ACCEPT
 done
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null
-sudo netfilter-persistent save
-echo "    Also add Ingress rules for TCP 80 and 443 in the OCI VCN Security List!"
+$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -q iptables-persistent >/dev/null 2>&1 || true
+$SUDO netfilter-persistent save >/dev/null 2>&1 || true
 
-echo "==> 4 GB swap (helps Chromium on small VMs)"
+echo "==> Swap (Chromium headroom)"
 if ! swapon --show | grep -q /swapfile; then
-  sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
-  sudo mkswap /swapfile && sudo swapon /swapfile
-  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  $SUDO fallocate -l 4G /swapfile && $SUDO chmod 600 /swapfile
+  $SUDO mkswap /swapfile >/dev/null && $SUDO swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | $SUDO tee -a /etc/fstab >/dev/null
 fi
 
 echo "==> DuckDNS updater (every 5 min)"
 if [[ -n "${DUCKDNS_TOKEN:-}" && "${MCP_DOMAIN:-}" == *.duckdns.org ]]; then
   sub="${MCP_DOMAIN%.duckdns.org}"
-  mkdir -p "$HOME/duckdns"
-  cat >"$HOME/duckdns/duck.sh" <<EOF
-#!/usr/bin/env bash
-curl -fsS "https://www.duckdns.org/update?domains=${sub}&token=${DUCKDNS_TOKEN}&ip=" -o "$HOME/duckdns/duck.log"
+  cat <<EOF | $SUDO tee /usr/local/bin/duckdns-update >/dev/null
+#!/bin/sh
+curl -fsS "https://www.duckdns.org/update?domains=${sub}&token=${DUCKDNS_TOKEN}&ip=" >/dev/null
 EOF
-  chmod 700 "$HOME/duckdns/duck.sh"
-  "$HOME/duckdns/duck.sh"
-  ( crontab -l 2>/dev/null | grep -v duckdns/duck.sh; echo "*/5 * * * * $HOME/duckdns/duck.sh >/dev/null 2>&1" ) | crontab -
+  $SUDO chmod 700 /usr/local/bin/duckdns-update
+  $SUDO /usr/local/bin/duckdns-update || true
+  echo "*/5 * * * * root /usr/local/bin/duckdns-update" | $SUDO tee /etc/cron.d/duckdns >/dev/null
 fi
 
-echo "==> Data directories"
+echo "==> Data directories (containers run as uid 1000)"
 mkdir -p deploy/data/{linkedin-profile,proxy/oauth,watcher,caddy}
+$SUDO chown -R 1000:1000 deploy/data/linkedin-profile deploy/data/proxy deploy/data/watcher
+chmod 600 .env
 
-echo
-echo "Done. Log out and back in (docker group), then:"
-echo "  1) bash scripts/linkedin_login.sh      # one-time LinkedIn login"
-echo "  2) docker compose --env-file .env -f deploy/compose.yaml up -d --build"
+echo "==> Start the stack"
+$SUDO docker compose --env-file .env -f deploy/compose.yaml pull -q linkedin-mcp caddy
+$SUDO docker compose --env-file .env -f deploy/compose.yaml up -d --build
+
+echo "==> Auto-update weekly (security patches + newer linkedin-mcp image)"
+cat <<EOF | $SUDO tee /etc/cron.d/linkedin-agent-update >/dev/null
+30 4 * * 0 root cd $REPO_DIR && git pull -q --ff-only; docker compose --env-file .env -f deploy/compose.yaml pull -q && docker compose --env-file .env -f deploy/compose.yaml up -d --build >/dev/null 2>&1
+EOF
+$SUDO chown -R "$RUN_USER":"$RUN_USER" "$REPO_DIR" 2>/dev/null || true
+$SUDO chown -R 1000:1000 deploy/data/linkedin-profile deploy/data/proxy deploy/data/watcher
+
+echo "SETUP_COMPLETE"

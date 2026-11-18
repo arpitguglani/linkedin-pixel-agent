@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -22,7 +23,7 @@ from fastapi import FastAPI, Request, Response
 from auth_proxy.policy import RateLimitExceeded, WriteRateLimiter
 from watcher import security
 from watcher.ai import Drafter
-from watcher.digest import format_digest, parse_inbox_text
+from watcher.digest import LedgerEntry, format_digest, parse_inbox
 from watcher.linkedin import (
     LinkedInMCP,
     LinkedInSessionError,
@@ -36,8 +37,8 @@ from watcher.telegram import Telegram
 log = logging.getLogger("watcher")
 
 RELOGIN_HINT = (
-    "⚠️ LinkedIn session looks logged out. Re-login: ssh to the VM with "
-    "`-L 6080:127.0.0.1:6080` and run scripts/linkedin_login.sh, then open the viewer URL."
+    "⚠️ LinkedIn session looks logged out. To re-login, ssh to the VM and run "
+    "`sudo bash scripts/linkedin_login.sh` — the login link will be sent here."
 )
 
 
@@ -72,6 +73,15 @@ class Settings:
             write_cooldown_seconds=float(e.get("WRITE_COOLDOWN_SECONDS", 60)),
             write_daily_cap=int(e.get("WRITE_DAILY_CAP", 20)),
         )
+
+
+def _parse_ts(value: Any) -> float:
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return time.time()
 
 
 def digest_target(day: date, hour: int, tz: ZoneInfo, jitter_minutes: int = 15) -> datetime:
@@ -114,6 +124,8 @@ class Agent:
         sender = str(event.get("from_name") or "").strip()
         snippet = str(event.get("snippet") or "").strip()
         subject = str(event.get("subject") or "").strip()
+        received = _parse_ts(event.get("received_at"))
+        await self.store.record_incoming(sender, received, snippet[:200])
         lo, hi = self.s.jitter_seconds
         await self.sleep(random.uniform(lo, hi))
         header = f"💬 New LinkedIn message from {sender or 'someone'}"
@@ -123,6 +135,7 @@ class Agent:
                 thread = find_thread_for_sender(extract_threads(inbox), sender)
                 convo_text = ""
                 if thread:
+                    await self.store.record_incoming(sender, received, "", thread.thread_id)
                     convo_text = section_text(await self.li.conversation(thread.thread_id))
         except LinkedInSessionError:
             await self.tg.send(f"{header}\n\n{subject}\n{snippet}\n\n{RELOGIN_HINT}")
@@ -145,6 +158,7 @@ class Agent:
                 "",
                 f"Reply: /send {thread.thread_id} <your text>",
                 f"Redraft: /draft {thread.thread_id} <instructions>",
+                f"No reply needed: /done {thread.thread_id}",
             ]
         await self.tg.send("\n".join(lines))
 
@@ -156,10 +170,21 @@ class Agent:
         except LinkedInSessionError:
             await self.tg.send(RELOGIN_HINT)
             return None
-        text = format_digest(parse_inbox_text(section_text(inbox)))
+        now = time.time()
+        for row in self._rows(inbox):
+            await self.store.reconcile(row.name, row.you_sent_last, row.preview, row.thread_id, now)
+        since = float(await self.store.get("last_digest_ts") or 0)
+        await self.store.set("last_digest_ts", str(now))
+        awaiting = [LedgerEntry(*r) for r in await self.store.awaiting()]
+        text = format_digest(awaiting, await self.store.replied_since(since) if since else 0, now)
         if text:
             await self.tg.send(text)
         return text
+
+    @staticmethod
+    def _rows(inbox: Any):
+        labelled = [(t.label, t.thread_id) for t in extract_threads(inbox) if t.label]
+        return parse_inbox(section_text(inbox), labelled)
 
     async def digest_loop(self) -> None:
         tz = ZoneInfo(self.s.digest_tz)
@@ -197,7 +222,8 @@ class Agent:
                 await self.tg.send(
                     "Commands:\n/inbox – recent threads\n/read <id> – open a thread\n"
                     "/draft <id> [instructions] – AI reply drafts\n"
-                    "/send <id> <text> – reply (asks for confirmation)\n/digest – run digest now"
+                    "/send <id> <text> – reply (asks for confirmation)\n"
+                    "/done <id> – mark as not needing a reply\n/digest – run digest now"
                 )
             elif cmd == "/inbox":
                 await self.cmd_inbox()
@@ -209,9 +235,13 @@ class Agent:
             elif cmd == "/send":
                 tid, _, body = rest.strip().partition(" ")
                 await self.cmd_send(tid, body)
+            elif cmd == "/done":
+                tid = self._resolve(rest.strip())
+                await self.store.record_outgoing(time.time(), thread_id=tid)
+                await self.tg.send(f"Marked {tid} as handled.")
             elif cmd == "/digest":
                 if not await self.run_digest():
-                    await self.tg.send("Nothing unread or awaiting your reply. 🎉")
+                    await self.tg.send("Nothing awaiting your reply. 🎉")
         except LinkedInSessionError:
             await self.tg.send(RELOGIN_HINT)
 
@@ -220,11 +250,9 @@ class Agent:
             inbox = await self.li.inbox(limit=15)
         threads = extract_threads(inbox)
         self.last_threads = [t.thread_id for t in threads]
-        rows = parse_inbox_text(section_text(inbox))
-        out = ["📥 Inbox"]
-        for r in rows[:15]:
-            flag = "🔴" if r.unread else ("⏳" if r.awaiting_reply else "✅")
-            out.append(f"{flag} {r.name}: {r.preview[:80]}")
+        out = ["📥 Inbox (⏳ = they wrote last, ✅ = you replied)"]
+        for r in self._rows(inbox)[:15]:
+            out.append(f"{'✅' if r.you_sent_last else '⏳'} {r.name}: {r.preview[:80]}")
         if threads:
             out.append("\nThread ids:")
             out += [f"{i + 1}. {t.label or '?'} → {t.thread_id}" for i, t in enumerate(threads[:15])]
@@ -296,6 +324,9 @@ class Agent:
             result = await self.li.reply(tid, body, confirm=True)
         status = result.get("status") if isinstance(result, dict) else None
         sent = result.get("sent") if isinstance(result, dict) else None
+        if sent:
+            who = result.get("participant") if isinstance(result, dict) else None
+            await self.store.record_outgoing(time.time(), name=who, thread_id=tid)
         await self.tg.send("✅ Sent." if sent else f"⚠️ Not confirmed as sent (status: {status}).")
 
     async def telegram_loop(self) -> None:

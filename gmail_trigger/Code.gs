@@ -6,11 +6,15 @@
  * summary (sender, subject, snippet — never the full email) to your VM, and
  * labels the email so it is processed once.
  *
- * Setup (see README): Project Settings -> Script properties:
- *   WEBHOOK_URL    = https://<your-domain>/webhook/gmail
- *   WEBHOOK_SECRET = <same value as WEBHOOK_SECRET in .env>
- * Then run `install` once and approve the permissions.
+ * Setup: the bootstrap script prints this file with CONFIG pre-filled. Paste
+ * it into script.google.com, select `install`, press Run, approve. Done.
+ * (Script properties WEBHOOK_URL / WEBHOOK_SECRET override CONFIG if set.)
  */
+
+var CONFIG = {
+  WEBHOOK_URL: '__WEBHOOK_URL__',
+  WEBHOOK_SECRET: '__WEBHOOK_SECRET__',
+};
 
 var LABEL_NAME = 'AI_LinkedIn_Processed';
 var QUERY =
@@ -23,6 +27,7 @@ function install() {
   });
   ScriptApp.newTrigger('checkLinkedInEmails').timeBased().everyMinutes(5).create();
   getOrCreateLabel_();
+  checkLinkedInEmails(); // first run now: verifies the connection end-to-end
   Logger.log('Installed 5-minute trigger.');
 }
 
@@ -52,9 +57,11 @@ function sign_(secret, timestamp, body) {
 
 function checkLinkedInEmails() {
   var props = PropertiesService.getScriptProperties();
-  var url = props.getProperty('WEBHOOK_URL');
-  var secret = props.getProperty('WEBHOOK_SECRET');
-  if (!url || !secret) throw new Error('Set WEBHOOK_URL and WEBHOOK_SECRET script properties');
+  var url = props.getProperty('WEBHOOK_URL') || CONFIG.WEBHOOK_URL;
+  var secret = props.getProperty('WEBHOOK_SECRET') || CONFIG.WEBHOOK_SECRET;
+  if (!url || url.indexOf('__') === 0 || !secret || secret.indexOf('__') === 0) {
+    throw new Error('Fill in CONFIG (or script properties WEBHOOK_URL / WEBHOOK_SECRET)');
+  }
 
   var threads = GmailApp.search(QUERY, 0, 20);
   if (!threads.length) return;

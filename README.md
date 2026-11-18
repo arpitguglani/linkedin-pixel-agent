@@ -1,159 +1,106 @@
 # LinkedIn DMs on your Pixel — $0, nothing on your laptop
 
-Read and reply to LinkedIn messages/InMails from **Gemini** or **Claude** on your phone,
-get **Telegram alerts within ~5 minutes** of a new message (with AI-drafted replies), and a
-**once-a-day digest** of unread / awaiting-reply threads.
+Read and reply to LinkedIn messages and InMails from **Gemini** or **Claude** on your phone. You also get:
+- **Telegram alerts** within about 5 minutes of a new message, with AI-drafted replies.
+- **A daily digest** of every thread where the other person wrote last.
 
+## Install (one command, ~15 minutes, mostly waiting)
+1. Create a free Oracle Cloud account at https://signup.cloud.oracle.com. It needs a card for identity
+   checks; Always Free resources are never charged. Pick a home region near you.
+2. In the Oracle console, click the **Cloud Shell** icon `>_` (top right) and paste:
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/arpitguglani/linkedin-pixel-agent/main/scripts/oci_bootstrap.sh)
+   ```
+3. Answer the prompts. The script links to each page you need: DuckDNS, @BotFather, AI Studio, and
+   Google OAuth client creation. Everything else is automated:
+   - Generating every secret.
+   - Creating the network, firewall rules and the Always Free Ampere VM. If Oracle reports "out of capacity", it keeps retrying across zones.
+   - DNS and HTTPS.
+   - Installing and starting the services.
+   - Detecting your Telegram chat.
+   - Weekly auto-updates.
+4. **LinkedIn login:** the script sends a link to your Telegram (`https://login.<you>.duckdns.org/...`).
+   Open it on your phone and sign in to LinkedIn.
+5. The script then prints two final steps:
+   - A **pre-filled Gmail Apps Script**. Paste it at script.google.com, then Run → `install`.
+   - The **URL to add** in Gemini (gemini.google.com → Settings → Connected apps → Add custom app) or
+     in Claude (Settings → Connectors).
+
+You can re-run the command at any time. It reuses everything that already exists.
+
+## How it works
 ```
 Gmail (LinkedIn notification email)
    └─ Apps Script (your Google account, every 5 min) ──HMAC──┐
                                                              ▼
-Pixel: Gemini / Claude ──HTTPS+Google OAuth──► Caddy (Oracle Free VM, DuckDNS)
-Pixel: Telegram ◄──────────────────────────────┐  ├─ /mcp      → auth-proxy :8080 ─┐
-                                               │  └─ /webhook  → watcher    :8090 ─┤
-                                               └──────────── watcher ◄─────────────┤
-                                                       linkedin-mcp :8000 (browser session)
+Pixel: Gemini / Claude ──HTTPS + Google OAuth──► Caddy (Oracle Free VM, DuckDNS)
+Pixel: Telegram ◄───────────── watcher :8090 ◄──┤ /webhook
+                                auth-proxy :8080 ◄┤ /mcp
+                                         └──► linkedin-mcp :8000 (your browser session)
 ```
 
-**Safety:** nothing is ever sent automatically.
+### "Awaiting your reply": tracked, not guessed
+The watcher keeps a ledger of each conversation's last incoming and last outgoing message. It gets this from three sources:
+- **Incoming:** every LinkedIn notification email that the Gmail trigger reports.
+- **Outgoing:** every reply you send through Telegram or the assistant.
+- **Daily check:** one inbox read reconciles each thread using LinkedIn's own marker. A preview that
+  starts with **"You:"** means you sent the last message, so replies you made in the LinkedIn app are picked up too.
+  Otherwise the other person wrote last, which also catches messages whose email notification was missed.
+
+A thread is awaiting your reply when its last incoming message is newer than your last outgoing one. Use `/done <id>`
+for threads that need no reply.
+
+### Safety
+**Nothing is ever sent automatically:**
 - **Claude/Gemini:** the proxy refuses `confirm_send=true` unless the exact same reply was first
-  previewed as a dry run (`confirm_send=false`). The app's own write confirmation applies on top.
+  previewed as a dry run. The app's own confirmation prompt applies on top.
 - **Telegram:** `/send` does a dry run, then shows **✅ Confirm send / ❌ Cancel** buttons. Each
   confirmation sends one message and expires after 15 minutes.
-- **Limits:** a 60 s cooldown and 20 sends/day by default.
-- **Exposed tools:** only the DM tools. The upstream server's profile, jobs, feed and connect tools are hidden.
-- **Access:** only your Google account (verified email) is let in. Every backend listens on localhost only.
+- **Limits:** a 60-second cooldown between sends and a cap of 20 per day.
 
-**LinkedIn browser activity is minimal:**
+**Access is locked down:**
+- Assistants only see the DM tools, never the profile, jobs, feed or connect tools.
+- Only your verified Google account can sign in.
+- Every backend listens on localhost only.
+
+**LinkedIn browser activity stays low:**
 - One inbox check plus one thread fetch per notification email.
-- One inbox check per day for the digest.
-- Anything you ask for yourself.
-
-There is no constant polling.
+- One inbox check per day.
+- Whatever you ask for yourself.
 
 > ⚠️ Automating a personal LinkedIn account through a browser session is against LinkedIn's
-> User Agreement. It can trigger security checkpoints or restrictions. You accepted this risk. Keep volumes human-scale.
-
----
-
-## 0. What you need (all free)
-- A personal Google account (Gemini custom apps: US, 18+, English, Keep Activity on).
-- A card for Oracle Cloud identity verification. Always Free resources are never charged.
-- Telegram on your Pixel.
-- Termux on your Pixel (only for the one-time LinkedIn login over SSH). Oracle **Cloud Shell**
-  in the browser works as well.
-
-## 1. Oracle Cloud Always Free VM
-1. Sign up at https://signup.cloud.oracle.com. Choose a home region with Ampere capacity; you cannot change it later.
-2. Go to **Compute → Instances → Create**:
-   - Image: **Ubuntu 24.04**.
-   - Shape: **VM.Standard.A1.Flex**, 2 OCPU / 12 GB. The Always Free allowance is 4 OCPU / 24 GB in total.
-   - Upload or generate an SSH key.
-
-   If you get *"Out of capacity"*, retry later or try a different availability domain.
-3. Go to **Networking → VCN → Security List → Add Ingress Rules**: TCP **80** and **443** from `0.0.0.0/0`.
-4. Get a free subdomain at https://www.duckdns.org (sign in with Google). Create `yourname`,
-   point it at the VM's public IP, and copy the **token**.
-
-## 2. Google OAuth client (for Gemini/Claude login)
-1. Go to https://console.cloud.google.com and create a project.
-2. Open **APIs & Services → OAuth consent screen** and set it up:
-   - User type **External**, publishing status **Testing**.
-   - Add **your Gmail as a Test user**.
-   - Scopes: `openid` and `.../auth/userinfo.email`.
-3. Open **Credentials → Create credentials → OAuth client ID** and create a **Web application** client:
-   - Authorized redirect URI: `https://yourname.duckdns.org/auth/callback`
-   - Copy the Client ID and Client secret.
-
-> In Testing mode Google refresh tokens expire after 7 days, so expect to re-authorize the connector about once a week.
-> You can publish the app to avoid this. With only the basic `email` scope, no verification is needed.
-
-## 3. Telegram bot + Gemini API key
-1. In Telegram, message **@BotFather** with `/newbot` and copy the token.
-2. Send your bot any message. Then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `chat.id`.
-3. Create a Gemini API key at https://aistudio.google.com/apikey. The free tier is plenty.
-
-## 4. Deploy on the VM
-```bash
-ssh ubuntu@yourname.duckdns.org
-git clone <this repo> linkedin-pixel-agent && cd linkedin-pixel-agent
-cp .env.example .env && nano .env      # fill everything; generate secrets as shown inside
-bash scripts/setup_vm.sh               # docker, firewall, swap, DuckDNS cron
-exit                                   # re-login so the docker group applies
-```
-
-## 5. One-time LinkedIn login (from your phone)
-1. On the Pixel, open Termux and run:
-   ```bash
-   pkg install openssh
-   ssh -L 6080:127.0.0.1:6080 ubuntu@yourname.duckdns.org
-   cd linkedin-pixel-agent && bash scripts/linkedin_login.sh
-   ```
-2. Open the printed `http://localhost:6080/...` URL in Chrome on the Pixel.
-3. Sign in to LinkedIn, including 2FA. The session is saved to `deploy/data/linkedin-profile`.
-
-Then start everything:
-```bash
-docker compose --env-file .env -f deploy/compose.yaml up -d --build
-docker compose --env-file .env -f deploy/compose.yaml logs -f --tail 50
-curl https://yourname.duckdns.org/webhook/health     # {"status":"ok"}
-```
-Repeat step 5 whenever Telegram says the session is logged out.
-
-## 6. Gmail trigger (Apps Script)
-1. Go to https://script.google.com and create a **New project**. Paste [`gmail_trigger/Code.gs`](gmail_trigger/Code.gs).
-2. Under **Project Settings → Script properties**, add:
-   - `WEBHOOK_URL` = `https://yourname.duckdns.org/webhook/gmail`
-   - `WEBHOOK_SECRET` = the same value as in `.env`
-3. Select the `install` function and click **Run**. Approve the Gmail and external-request permissions.
-4. Make sure LinkedIn email notifications for **messages and InMails** are on: LinkedIn → Settings → Notifications → Email.
-
-## 7. Connect your phone assistants
-**Gemini (recommended on Pixel):**
-1. On **gemini.google.com**, use a desktop browser or "Desktop site" in Pixel Chrome.
-2. Go to **Settings → Connected apps → Add custom app** and enter the URL `https://yourname.duckdns.org/mcp`.
-3. Sign in with your allowlisted Google account and approve the consent page.
-4. The app now shows up in the Gemini Android app.
-
-**Claude (Free plan allows 1 custom connector):**
-1. On claude.ai, go to **Settings → Connectors → Add custom connector** and enter `https://yourname.duckdns.org/mcp`.
-2. Connect and sign in with Google.
-3. Set the reply tool to *"Ask before use"*. The connector then works in the Claude Android app.
-
-Example prompts:
-- "What LinkedIn messages need a reply?"
-- "Open my thread with Jane and draft a friendly yes."
-- "Send it."
-
-When you say "send it", the assistant first previews the reply, then asks you to confirm.
+> User Agreement. It can trigger checkpoints or restrictions. Keep volumes human-scale.
 
 ## Telegram commands
 | Command | What it does |
 |---|---|
-| `/inbox` | Lists recent threads with numbers and thread ids. |
-| `/read <id or #>` | Shows the full conversation. |
-| `/draft <id> [instructions]` | Gives 2–3 AI reply drafts. |
-| `/send <id> <text>` | Does a dry run, then shows a **Confirm** button. |
-| `/digest` | Runs the daily digest now. |
+| `/inbox` | Lists recent threads (⏳ they wrote last, ✅ you replied) |
+| `/read <id or #>` | Shows the full conversation |
+| `/draft <id> [instructions]` | Gives 2–3 AI reply drafts |
+| `/send <id> <text>` | Does a dry run, then shows the **Confirm** button |
+| `/done <id>` | Marks a thread as not needing a reply |
+| `/digest` | Runs the digest now |
+
+## Maintenance
+- **Logged out of LinkedIn** (Telegram tells you): `ssh -i ~/.linkedin-agent/id_rsa ubuntu@<domain>`
+  from Cloud Shell, then `cd linkedin-pixel-agent && sudo bash scripts/linkedin_login.sh`. The login link is sent to Telegram again.
+- **Weekly re-authorization:** while the Google OAuth app is in *Testing* mode, the Gemini/Claude connector needs
+  re-authorizing every 7 days. To stop this, publish the app under Google Cloud → Auth → Audience → **Publish**. No verification is needed for the email scope.
+- **Logs:** `sudo docker compose --env-file .env -f deploy/compose.yaml logs -f --tail 50`
 
 ## Costs
 | Item | Cost |
 |---|---|
 | Oracle A1 VM, DuckDNS, Caddy/Let's Encrypt | \$0 |
 | Apps Script, Gemini API free tier, Telegram | \$0 |
-| Gemini app custom apps, Claude Free connector | \$0 |
+| Gemini custom apps, Claude Free plan (1 connector) | \$0 |
 
-## Troubleshooting
-- **Connector fails to add:** check the following:
-  - `https://<domain>/.well-known/oauth-authorization-server` returns JSON.
-  - The redirect URI in Google Cloud matches exactly.
-  - Your Gmail is listed as a test user.
-- **"Authorization failed … insufficient permissions":** you signed in with a different Google account than `ALLOWED_EMAIL`.
-- **"Send blocked: first call this tool with confirm_send=false…":** this is intended. Ask the assistant to preview first.
-- **No alerts:**
-  - Check the Apps Script **Executions** log.
-  - Check the `docker compose logs watcher` output.
-  - Make sure LinkedIn notification emails are reaching Gmail.
+## Manual install (any Ubuntu VM)
+```bash
+git clone https://github.com/arpitguglani/linkedin-pixel-agent && cd linkedin-pixel-agent
+cp .env.example .env && nano .env
+sudo bash scripts/setup_vm.sh && sudo bash scripts/linkedin_login.sh
+```
 
 ## Development
 ```bash

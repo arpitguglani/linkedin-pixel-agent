@@ -19,3 +19,10 @@
 		-Server
 	}
 }
+
+# LinkedIn login viewer (noVNC). Only answers while scripts/linkedin_login.sh is
+# running (otherwise 502). Access additionally requires the random token that
+# the script prints in the URL fragment.
+login.{$MCP_DOMAIN} {
+	reverse_proxy 127.0.0.1:6080
+}
