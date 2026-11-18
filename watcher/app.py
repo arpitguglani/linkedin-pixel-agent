@@ -37,8 +37,8 @@ from watcher.telegram import Telegram
 log = logging.getLogger("watcher")
 
 RELOGIN_HINT = (
-    "⚠️ LinkedIn session looks logged out. To re-login, ssh to the VM and run "
-    "`sudo bash scripts/linkedin_login.sh` — the login link will be sent here."
+    "⚠️ LinkedIn session looks logged out. Send /login and I'll message you a "
+    "secure login link to open on your phone."
 )
 
 
@@ -47,6 +47,7 @@ class Settings:
     webhook_secret: str
     linkedin_mcp_url: str = "http://127.0.0.1:8000/mcp"
     db_path: str = "/data/watcher.db"
+    login_request_file: str = "/data/login.request"
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
     gemini_api_key: str | None = None
@@ -64,6 +65,7 @@ class Settings:
             webhook_secret=e["WEBHOOK_SECRET"],
             linkedin_mcp_url=e.get("LINKEDIN_MCP_URL", cls.linkedin_mcp_url),
             db_path=e.get("WATCHER_DB", cls.db_path),
+            login_request_file=e.get("LOGIN_REQUEST_FILE", cls.login_request_file),
             telegram_token=e.get("TELEGRAM_BOT_TOKEN") or None,
             telegram_chat_id=e.get("TELEGRAM_CHAT_ID") or None,
             gemini_api_key=e.get("GEMINI_API_KEY") or None,
@@ -223,7 +225,8 @@ class Agent:
                     "Commands:\n/inbox – recent threads\n/read <id> – open a thread\n"
                     "/draft <id> [instructions] – AI reply drafts\n"
                     "/send <id> <text> – reply (asks for confirmation)\n"
-                    "/done <id> – mark as not needing a reply\n/digest – run digest now"
+                    "/done <id> – mark as not needing a reply\n/digest – run digest now\n"
+                    "/login – re-login to LinkedIn"
                 )
             elif cmd == "/inbox":
                 await self.cmd_inbox()
@@ -235,6 +238,12 @@ class Agent:
             elif cmd == "/send":
                 tid, _, body = rest.strip().partition(" ")
                 await self.cmd_send(tid, body)
+            elif cmd == "/login":
+                # The host's cron picks this up within a minute and runs
+                # scripts/linkedin_login.sh, which sends the link here.
+                with open(self.s.login_request_file, "w") as fh:
+                    fh.write(str(time.time()))
+                await self.tg.send("🔐 Starting LinkedIn login… the link arrives here in ~1–2 minutes.")
             elif cmd == "/done":
                 tid = self._resolve(rest.strip())
                 await self.store.record_outgoing(time.time(), thread_id=tid)

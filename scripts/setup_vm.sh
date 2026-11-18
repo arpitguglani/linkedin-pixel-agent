@@ -55,6 +55,11 @@ echo "==> Start the stack"
 $SUDO docker compose --env-file .env -f deploy/compose.yaml pull -q linkedin-mcp caddy
 $SUDO docker compose --env-file .env -f deploy/compose.yaml up -d --build
 
+echo "==> Telegram /login support (host picks up the request file every minute)"
+cat <<EOF | $SUDO tee /etc/cron.d/linkedin-agent-login >/dev/null
+* * * * * root f=$REPO_DIR/deploy/data/watcher/login.request; [ -f \$f ] && rm -f \$f && cd $REPO_DIR && flock -n /tmp/li-login.lock bash scripts/linkedin_login.sh >>/var/log/linkedin-login.log 2>&1
+EOF
+
 echo "==> Auto-update weekly (security patches + newer linkedin-mcp image)"
 cat <<EOF | $SUDO tee /etc/cron.d/linkedin-agent-update >/dev/null
 30 4 * * 0 root cd $REPO_DIR && git pull -q --ff-only; docker compose --env-file .env -f deploy/compose.yaml pull -q && docker compose --env-file .env -f deploy/compose.yaml up -d --build >/dev/null 2>&1

@@ -51,40 +51,22 @@ fernet() { python3 -c "import base64,os;print(base64.urlsafe_b64encode(os.urando
 # --------------------------------------------------------------------------
 bold "Step 1/5 — your accounts (values are saved in $ENV_FILE)"
 cat <<'TXT'
-You need 3 things open in other tabs (each takes ~1 minute):
-  a) https://www.duckdns.org  -> sign in with Google, add a subdomain, copy the token
-  b) Telegram: talk to @BotFather -> /newbot -> copy the bot token
-  c) https://aistudio.google.com/apikey -> Create API key   (optional, for AI drafts)
+You need (each takes ~1 minute):
+  a) Telegram: talk to @BotFather -> /newbot -> copy the bot token
+  b) https://aistudio.google.com/apikey -> Create API key   (optional, for AI drafts)
+  The server gets a free hostname <ip>.sslip.io automatically (no account needed).
 TXT
-ask DUCKDNS_SUB "DuckDNS subdomain (just the name, e.g. arpit-li)"
-MCP_DOMAIN="${MCP_DOMAIN:-${DUCKDNS_SUB%.duckdns.org}.duckdns.org}"
-ask DUCKDNS_TOKEN "DuckDNS token" "" secret
 ask ALLOWED_EMAIL "Your Google account email (the only one allowed in)"
 ask TELEGRAM_BOT_TOKEN "Telegram bot token" "" secret
 if [[ -z "${GEMINI_API_KEY+x}" ]]; then read -r -s -p "Gemini API key (Enter to skip): " GEMINI_API_KEY; echo; fi
 ask DAILY_DIGEST_HOUR "Daily digest hour (0-23, local)" "18"
 ask DAILY_DIGEST_TZ "Your timezone" "America/Los_Angeles"
 
-cat <<TXT
-
-  d) Google OAuth client (lets Gemini/Claude sign in as you):
-     1. https://console.cloud.google.com/projectcreate  -> create a project
-     2. https://console.cloud.google.com/auth/branding  -> Get started: app name "LinkedIn agent",
-        your email, Audience = External -> Create
-     3. https://console.cloud.google.com/auth/audience  -> Test users -> Add ${ALLOWED_EMAIL}
-     4. https://console.cloud.google.com/auth/clients/create  -> Web application
-        Authorized redirect URI:  https://${MCP_DOMAIN}/auth/callback
-        -> Create, copy Client ID + Client secret
-TXT
-ask GOOGLE_CLIENT_ID "Google OAuth Client ID"
-ask GOOGLE_CLIENT_SECRET "Google OAuth Client secret" "" secret
-
 JWT_SIGNING_KEY="${JWT_SIGNING_KEY:-$(rand)}"
 STORAGE_ENCRYPTION_KEY="${STORAGE_ENCRYPTION_KEY:-$(fernet)}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-$(rand)}"
-for k in DUCKDNS_SUB MCP_DOMAIN DUCKDNS_TOKEN ALLOWED_EMAIL TELEGRAM_BOT_TOKEN GEMINI_API_KEY \
-  DAILY_DIGEST_HOUR DAILY_DIGEST_TZ GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET JWT_SIGNING_KEY \
-  STORAGE_ENCRYPTION_KEY WEBHOOK_SECRET; do save_env "$k" "${!k}"; done
+for k in ALLOWED_EMAIL TELEGRAM_BOT_TOKEN GEMINI_API_KEY DAILY_DIGEST_HOUR DAILY_DIGEST_TZ \
+  JWT_SIGNING_KEY STORAGE_ENCRYPTION_KEY WEBHOOK_SECRET; do save_env "$k" "${!k}"; done
 
 # Telegram chat id: auto-detect after you press Start in the bot chat
 if [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
@@ -106,7 +88,8 @@ save_env DAILY_DIGEST_TZ "$DAILY_DIGEST_TZ"
 
 # --------------------------------------------------------------------------
 bold "Step 2/5 — Oracle network + Always Free VM"
-C="${OCI_COMPARTMENT:-${OCI_TENANCY:?Run this in OCI Cloud Shell}}"
+OCI_TENANCY="${OCI_TENANCY:-$(awk -F= '/^tenancy/{gsub(/ /,"",$2);print $2;exit}' "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}" 2>/dev/null)}"
+C="${OCI_COMPARTMENT:-${OCI_TENANCY:?Run this in OCI Cloud Shell or configure ~/.oci/config}}"
 q() { oci "$@" 2>/dev/null; }
 
 VCN="$(q network vcn list -c "$C" --display-name "$NAME-vcn" --query 'data[0].id' --raw-output || true)"
@@ -175,8 +158,29 @@ EOF
 fi
 IP="$(oci compute instance list-vnics --instance-id "$INSTANCE" --query 'data[0]."public-ip"' --raw-output)"
 echo "  VM running at $IP"
-curl -fsS "https://www.duckdns.org/update?domains=${MCP_DOMAIN%.duckdns.org}&token=${DUCKDNS_TOKEN}&ip=${IP}" >/dev/null
-echo "  ${MCP_DOMAIN} -> ${IP}"
+if [[ -n "${DUCKDNS_TOKEN:-}" && "${MCP_DOMAIN:-}" == *.duckdns.org ]]; then
+  curl -fsS "https://www.duckdns.org/update?domains=${MCP_DOMAIN%.duckdns.org}&token=${DUCKDNS_TOKEN}&ip=${IP}" >/dev/null
+else
+  MCP_DOMAIN="${IP//./-}.sslip.io"
+fi
+save_env MCP_DOMAIN "$MCP_DOMAIN"
+echo "  Hostname: ${MCP_DOMAIN} -> ${IP}"
+
+bold "Google sign-in client (lets Gemini/Claude sign in as you)"
+if [[ -z "${GOOGLE_CLIENT_ID:-}" ]]; then
+cat <<TXT
+  1. https://console.cloud.google.com/projectcreate  -> create a project
+  2. https://console.cloud.google.com/auth/branding  -> Get started: app name "LinkedIn agent",
+     your email, Audience = External -> Create
+  3. https://console.cloud.google.com/auth/audience  -> Test users -> Add ${ALLOWED_EMAIL}
+  4. https://console.cloud.google.com/auth/clients/create  -> Web application
+     Authorized redirect URI:  https://${MCP_DOMAIN}/auth/callback
+     -> Create, copy Client ID + Client secret
+TXT
+fi
+ask GOOGLE_CLIENT_ID "Google OAuth Client ID"
+ask GOOGLE_CLIENT_SECRET "Google OAuth Client secret" "" secret
+save_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"; save_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET"
 
 # --------------------------------------------------------------------------
 bold "Step 3/5 — installing on the VM (3-6 minutes)"

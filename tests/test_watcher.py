@@ -287,6 +287,13 @@ async def test_digest_uses_ledger_and_inbox(agent):
     assert len(agent.tg.messages) == n
 
 
+async def test_login_command_writes_request(agent, tmp_path):
+    agent.s.login_request_file = str(tmp_path / "login.request")
+    await agent.handle_command("/login")
+    assert (tmp_path / "login.request").exists()
+    assert "login" in agent.tg.messages[-1][0].lower()
+
+
 async def test_done_command_clears_thread(agent):
     await agent.store.record_incoming("Jane Recruiter", 100, "hi", thread_id="2-AAA=")
     await agent.handle_command("/done 2-AAA=")

@@ -12,7 +12,7 @@ Read and reply to LinkedIn messages and InMails from **Gemini** or **Claude** on
    bash <(curl -fsSL https://raw.githubusercontent.com/arpitguglani/linkedin-pixel-agent/main/scripts/oci_bootstrap.sh)
    ```
 3. Answer the prompts. The script links to each page you need: DuckDNS, @BotFather, AI Studio, and
-   Google OAuth client creation. Everything else is automated:
+   Google OAuth client creation. The server gets a free `<ip>.sslip.io` hostname, so no DuckDNS account is needed. Everything else is automated:
    - Generating every secret.
    - Creating the network, firewall rules and the Always Free Ampere VM. If Oracle reports "out of capacity", it keeps retrying across zones.
    - DNS and HTTPS.
@@ -80,10 +80,10 @@ for threads that need no reply.
 | `/send <id> <text>` | Does a dry run, then shows the **Confirm** button |
 | `/done <id>` | Marks a thread as not needing a reply |
 | `/digest` | Runs the digest now |
+| `/login` | Sends a fresh LinkedIn login link |
 
 ## Maintenance
-- **Logged out of LinkedIn** (Telegram tells you): `ssh -i ~/.linkedin-agent/id_rsa ubuntu@<domain>`
-  from Cloud Shell, then `cd linkedin-pixel-agent && sudo bash scripts/linkedin_login.sh`. The login link is sent to Telegram again.
+- **Logged out of LinkedIn** (Telegram tells you): send `/login` to the bot. A fresh login link arrives within about 1–2 minutes.
 - **Weekly re-authorization:** while the Google OAuth app is in *Testing* mode, the Gemini/Claude connector needs
   re-authorizing every 7 days. To stop this, publish the app under Google Cloud → Auth → Audience → **Publish**. No verification is needed for the email scope.
 - **Logs:** `sudo docker compose --env-file .env -f deploy/compose.yaml logs -f --tail 50`
