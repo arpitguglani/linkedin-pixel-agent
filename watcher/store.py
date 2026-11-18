@@ -1,0 +1,76 @@
+"""Tiny SQLite store: webhook dedupe, pending sends, digest bookkeeping."""
+
+from __future__ import annotations
+
+import secrets
+import time
+
+import aiosqlite
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS seen_events (id TEXT PRIMARY KEY, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS pending_sends (
+    token TEXT PRIMARY KEY, thread_id TEXT NOT NULL, message TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+"""
+
+
+class Store:
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    async def init(self) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.executescript(SCHEMA)
+            await db.commit()
+
+    async def mark_seen(self, event_id: str) -> bool:
+        """Returns True if this is the first time we see event_id."""
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "INSERT OR IGNORE INTO seen_events (id, created_at) VALUES (?, ?)",
+                (event_id, time.time()),
+            )
+            await db.execute("DELETE FROM seen_events WHERE created_at < ?", (time.time() - 30 * 86400,))
+            await db.commit()
+            return cur.rowcount == 1
+
+    async def create_pending_send(self, thread_id: str, message: str) -> str:
+        token = secrets.token_urlsafe(9)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO pending_sends (token, thread_id, message, created_at) VALUES (?, ?, ?, ?)",
+                (token, thread_id, message, time.time()),
+            )
+            await db.commit()
+        return token
+
+    async def pop_pending_send(self, token: str, max_age_seconds: float = 900) -> tuple[str, str] | None:
+        """Atomically consume a pending send (one confirmation = one send)."""
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT thread_id, message, created_at FROM pending_sends WHERE token = ?",
+                (token,),
+            )
+            row = await cur.fetchone()
+            await db.execute("DELETE FROM pending_sends WHERE token = ?", (token,))
+            await db.commit()
+        if not row or time.time() - row[2] > max_age_seconds:
+            return None
+        return row[0], row[1]
+
+    async def get(self, key: str) -> str | None:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT v FROM kv WHERE k = ?", (key,))
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def set(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (key, value),
+            )
+            await db.commit()

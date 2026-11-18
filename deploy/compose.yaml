@@ -1,0 +1,56 @@
+# All services use host networking and bind to 127.0.0.1, except Caddy which
+# is the only thing listening publicly (80/443).
+name: linkedin-pixel-agent
+
+services:
+  linkedin-mcp:
+    image: stickerdaniel/linkedin-mcp-server:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: ${DAILY_DIGEST_TZ:-America/Los_Angeles}
+    volumes:
+      - ./data/linkedin-profile:/home/pwuser/.linkedin-mcp
+    command: ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000", "--path", "/mcp"]
+    shm_size: "1gb"
+
+  auth-proxy:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    restart: unless-stopped
+    network_mode: host
+    env_file: ../.env
+    environment:
+      LINKEDIN_MCP_URL: http://127.0.0.1:8000/mcp
+      OAUTH_STORAGE_DIR: /data/oauth
+      PROXY_HOST: 127.0.0.1
+      PROXY_PORT: "8080"
+    volumes:
+      - ./data/proxy:/data
+    command: ["python", "-m", "auth_proxy.proxy"]
+    depends_on: [linkedin-mcp]
+
+  watcher:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    restart: unless-stopped
+    network_mode: host
+    env_file: ../.env
+    environment:
+      LINKEDIN_MCP_URL: http://127.0.0.1:8000/mcp
+      WATCHER_DB: /data/watcher.db
+      WATCHER_HOST: 127.0.0.1
+      WATCHER_PORT: "8090"
+      TZ: ${DAILY_DIGEST_TZ:-America/Los_Angeles}
+    volumes:
+      - ./data/watcher:/data
+    command: ["python", "-m", "watcher.app"]
+    depends_on: [linkedin-mcp]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MCP_DOMAIN: ${MCP_DOMAIN}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
