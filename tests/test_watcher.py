@@ -287,6 +287,16 @@ async def test_digest_uses_ledger_and_inbox(agent):
     assert len(agent.tg.messages) == n
 
 
+async def test_alert_without_ai_shows_conversation(agent):
+    async def no_ai(text, instructions=""):
+        return ""
+
+    agent.ai.triage = no_ai
+    await agent.handle_email_event({"message_id": "m9", "from_name": "Jane Recruiter", "snippet": "Hi"})
+    text, _ = agent.tg.messages[-1]
+    assert "Are you open to a Staff role?" in text and "Gemini/Claude" in text
+
+
 async def test_login_command_writes_request(agent, tmp_path):
     agent.s.login_request_file = str(tmp_path / "login.request")
     await agent.handle_command("/login")

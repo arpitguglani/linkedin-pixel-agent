@@ -154,7 +154,14 @@ class Agent:
         if thread:
             lines.append(f"Thread: {thread.thread_id}")
         lines.append("")
-        lines.append(triage or snippet or "(no preview)")
+        # Without a Gemini key: show the latest part of the conversation itself.
+        lines.append(triage or (convo_text[-1200:] if convo_text else "") or snippet or "(no preview)")
+        if not triage:
+            lines += [
+                "",
+                "Tip: open Gemini/Claude and say “draft a reply to my LinkedIn thread with "
+                f"{sender or 'them'}”.",
+            ]
         if thread:
             lines += [
                 "",
