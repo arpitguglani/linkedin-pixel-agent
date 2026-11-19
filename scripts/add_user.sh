@@ -29,6 +29,7 @@ fi
 MCP_PORT=$((8000 + SLOT))
 PROXY_PORT=$((8080 + SLOT))
 LOGIN_PORT=$((6080 + SLOT))
+DISPLAY_NUM=$((99 + SLOT))
 
 UDIR="$PWD/deploy/users/$USER_ID"
 mkdir -p "$UDIR/data/linkedin-profile" "$UDIR/data/proxy/oauth" "$PWD/deploy/caddy/users.d"
@@ -51,10 +52,12 @@ DAILY_DIGEST_TZ=${DAILY_DIGEST_TZ:-America/Los_Angeles}
 MCP_PORT=${MCP_PORT}
 PROXY_PORT=${PROXY_PORT}
 LOGIN_PORT=${LOGIN_PORT}
+DISPLAY_NUM=${DISPLAY_NUM}
 EOF
   chmod 600 "$UDIR/.env"
 else
   sed -i "s|^MCP_DOMAIN=.*|MCP_DOMAIN=${USER_DOMAIN}|; s|^ALLOWED_EMAIL=.*|ALLOWED_EMAIL=${USER_EMAIL}|" "$UDIR/.env"
+  grep -q '^DISPLAY_NUM=' "$UDIR/.env" || echo "DISPLAY_NUM=${DISPLAY_NUM}" >>"$UDIR/.env"
 fi
 
 cat >"$UDIR/compose.yaml" <<EOF
@@ -67,6 +70,7 @@ services:
     network_mode: host
     environment:
       TZ: \${DAILY_DIGEST_TZ:-America/Los_Angeles}
+      DISPLAY: ":${DISPLAY_NUM}"
     volumes:
       - ./data/linkedin-profile:/home/pwuser/.linkedin-mcp
     command: ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "${MCP_PORT}", "--path", "/mcp"]

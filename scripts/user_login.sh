@@ -32,6 +32,7 @@ for attempt in 1 2 3; do
   docker run -d --name "$CONTAINER" \
     --hostname "$(hostname)" \
     -e TZ="${DAILY_DIGEST_TZ:-America/Los_Angeles}" \
+    -e DISPLAY=":${DISPLAY_NUM:-100}" \
     -v "$UDIR/data/linkedin-profile:/home/pwuser/.linkedin-mcp" \
     -p "127.0.0.1:${PORT}:6080" --shm-size=1g \
     stickerdaniel/linkedin-mcp-server:latest --login --login-viewer >/dev/null
