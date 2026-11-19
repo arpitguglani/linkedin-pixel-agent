@@ -31,8 +31,8 @@ PROXY_PORT=$((8080 + SLOT))
 LOGIN_PORT=$((6080 + SLOT))
 
 UDIR="$PWD/deploy/users/$USER_ID"
-mkdir -p "$UDIR/data/linkedin-profile" "$UDIR/data/proxy" "$PWD/deploy/caddy/users.d"
-chown -R 1001:1001 "$UDIR/data/linkedin-profile"
+mkdir -p "$UDIR/data/linkedin-profile" "$UDIR/data/proxy/oauth" "$PWD/deploy/caddy/users.d"
+chown -R 1000:1000 "$UDIR/data/linkedin-profile" "$UDIR/data/proxy"
 chmod 700 "$UDIR/data/linkedin-profile"
 
 if [[ ! -f "$UDIR/.env" ]]; then
