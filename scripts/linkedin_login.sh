@@ -11,13 +11,14 @@ DC=(docker compose --env-file .env -f deploy/compose.yaml)
 
 # Free CPU/RAM on small VMs (e.g. e2-micro) while the login browser runs; keep Caddy up.
 "${DC[@]}" stop linkedin-mcp auth-proxy watcher >/dev/null 2>&1 || true
-rm -f "$PWD/deploy/data/linkedin-profile/profile"/Singleton* 2>/dev/null || true
-trap 'rm -f "$PWD/deploy/data/linkedin-profile/profile"/Singleton* 2>/dev/null || true; "${DC[@]}" up -d linkedin-mcp auth-proxy watcher >/dev/null 2>&1 || true' EXIT
+find "$PWD/deploy/data/linkedin-profile" -name 'Singleton*' -delete 2>/dev/null || true
+trap 'find "$PWD/deploy/data/linkedin-profile" -name "Singleton*" -delete 2>/dev/null || true; "${DC[@]}" up -d linkedin-mcp auth-proxy watcher >/dev/null 2>&1 || true' EXIT
 
 url=""
 for attempt in 1 2 3; do
   docker rm -f linkedin-login >/dev/null 2>&1 || true
   docker run -d --name linkedin-login \
+    --hostname "$(hostname)" \
     -e TZ="${DAILY_DIGEST_TZ:-America/Los_Angeles}" \
     -v "$PWD/deploy/data/linkedin-profile:/home/pwuser/.linkedin-mcp" \
     -p 127.0.0.1:6080:6080 --shm-size=1g \
