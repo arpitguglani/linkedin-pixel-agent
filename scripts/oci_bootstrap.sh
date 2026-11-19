@@ -57,8 +57,10 @@ You need (each takes ~1 minute):
   The server gets a free hostname <ip>.sslip.io automatically (no account needed).
 TXT
 ask ALLOWED_EMAIL "Your Google account email (the only one allowed in)"
-ask TELEGRAM_BOT_TOKEN "Telegram bot token" "" secret
-if [[ -z "${GEMINI_API_KEY+x}" ]]; then read -r -s -p "Gemini API key (Enter to skip): " GEMINI_API_KEY; echo; fi
+if [[ -z "${TELEGRAM_BOT_TOKEN+x}" ]]; then
+  read -r -s -p "Telegram bot token from @BotFather (Enter to skip Telegram): " TELEGRAM_BOT_TOKEN; echo
+fi
+if [[ -z "${GEMINI_API_KEY+x}" ]]; then read -r -s -p "Gemini API key (Enter to skip — not needed for Gemini/Claude app): " GEMINI_API_KEY; echo; fi
 ask DAILY_DIGEST_HOUR "Daily digest hour (0-23, local)" "18"
 ask DAILY_DIGEST_TZ "Your timezone" "America/Los_Angeles"
 
@@ -69,7 +71,7 @@ for k in ALLOWED_EMAIL TELEGRAM_BOT_TOKEN GEMINI_API_KEY DAILY_DIGEST_HOUR DAILY
   JWT_SIGNING_KEY STORAGE_ENCRYPTION_KEY WEBHOOK_SECRET; do save_env "$k" "${!k}"; done
 
 # Telegram chat id: auto-detect after you press Start in the bot chat
-if [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -z "${TELEGRAM_CHAT_ID:-}" ]]; then
   bot="$(curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq -r .result.username)"
   echo; echo "Open https://t.me/${bot} on your phone and press START (or send 'hi')..."
   for _ in $(seq 1 90); do
@@ -229,6 +231,8 @@ B) Phone assistant:
 Done! Telegram will ping you on new LinkedIn messages and send a digest daily at ${DAILY_DIGEST_HOUR}:00.
 SSH later with: ssh -i $KEY ubuntu@${MCP_DOMAIN}
 TXT
-curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-  --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-  --data-urlencode "text=🎉 Server is up. Add https://${MCP_DOMAIN}/mcp in Gemini → Connected apps (or Claude → Connectors). Send /help here for commands." >/dev/null || true
+if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+  curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+    --data-urlencode "text=🎉 Server is up. Add https://${MCP_DOMAIN}/mcp in Gemini → Connected apps (or Claude → Connectors). Send /help here for commands." >/dev/null || true
+fi
