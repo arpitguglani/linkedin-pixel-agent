@@ -196,6 +196,8 @@ class Agent:
         return parse_inbox(section_text(inbox), labelled)
 
     async def digest_loop(self) -> None:
+        if not self.tg.enabled:
+            return
         tz = ZoneInfo(self.s.digest_tz)
         while True:
             try:

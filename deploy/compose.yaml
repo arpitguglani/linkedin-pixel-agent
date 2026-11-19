@@ -53,4 +53,5 @@ services:
       MCP_DOMAIN: ${MCP_DOMAIN}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/users.d:/etc/caddy/users.d:ro
       - ./data/caddy:/data

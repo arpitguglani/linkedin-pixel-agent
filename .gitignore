@@ -4,4 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 deploy/data/
+deploy/users/
+deploy/caddy/users.d/*.caddy
 *.db
